@@ -1,0 +1,67 @@
+name: AI Discovery
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform-scan:
+    runs-on: self-hosted
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: ["src/main"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AI_DISCOVERY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Terraform state scan for ${{ matrix.dir }}
+        run: |
+          curl -fsSL https://scanner.scan0.io/tfscan/latest/linux-amd64 -o tfscan
+          chmod +x tfscan
+          mkdir -p out
+          SAFE=$(echo "${{ matrix.dir }}" | tr '/ ' '__')
+          ./tfscan scan \
+            --dir="${{ matrix.dir }}" \
+            --metadata-only \
+            --repo="${{ github.repository }}" \
+            --out="out/tf-${SAFE}.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tf-${{ strategy.job-index }}
+          path: out/*.json
+          retention-days: 7
+
+  upload:
+    needs: [terraform-scan]
+    if: >-
+      ${{ !cancelled() && (needs.terraform-scan.result == 'success') }}
+    runs-on: self-hosted
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: bundle
+      - name: Push metadata to Scan0
+        env:
+          SCAN0_API_KEY: ${{ secrets.SCAN0_API_KEY }}
+        run: |
+          find bundle -name '*.json' -print0 | while IFS= read -r -d '' f; do
+            echo "uploading $f"
+            curl -sf -X POST "https://api.scan0.io/api/v1/scan-results" \
+              -H "Authorization: Bearer ${SCAN0_API_KEY}" \
+              -H "Content-Type: application/json" \
+              -H "X-Repo: ${{ github.repository }}" \
+              -H "X-Commit: ${{ github.sha }}" \
+              --data-binary @"$f"
+          done
