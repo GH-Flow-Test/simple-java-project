@@ -1,0 +1,29 @@
+name: AI Discovery
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: self-hosted
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download Scanner
+        run: |
+          curl -fsSL https://scanner.scan0.io/latest/linux-amd64 -o scanner
+          chmod +x scanner
+
+      - name: Run AI Discovery Scan
+        env:
+          SCAN0_API_KEY: ${{ secrets.SCAN0_API_KEY }}
+        run: |
+          ./scanner scan \
+            --repo "${{ github.repository }}" \
+            --upload-url https://api.scan0.io/api/v1/scan-results \
+            --api-key "$SCAN0_API_KEY"
